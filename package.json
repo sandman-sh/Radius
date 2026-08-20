@@ -1,0 +1,15 @@
+{
+  "name": "radius",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": ["apps/api", "apps/web"],
+  "scripts": {
+    "dev": "concurrently -k \"npm run dev --workspace @radius/api\" \"npm run dev --workspace @radius/web\"",
+    "build": "npm run build --workspace @radius/web",
+    "start": "npm run start --workspace @radius/api",
+    "test": "npm test --workspaces --if-present"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

@@ -1,0 +1,104 @@
+name: Radius remediation
+
+on:
+  repository_dispatch:
+    types: [radius-remediation]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  remediation:
+    if: ${{ github.event.client_payload.packageName != '' && github.event.client_payload.targetVersion != '' }}
+    runs-on: ubuntu-latest
+    env:
+      PACKAGE_NAME: ${{ github.event.client_payload.packageName }}
+      CURRENT_VERSION: ${{ github.event.client_payload.version }}
+      TARGET_VERSION: ${{ github.event.client_payload.targetVersion }}
+      ECOSYSTEM: ${{ github.event.client_payload.ecosystem }}
+      ADVISORY_ID: ${{ github.event.client_payload.advisoryId }}
+      DEPENDENCY_FILE: ${{ github.event.client_payload.fileName }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        if: ${{ env.ECOSYSTEM == 'npm' }}
+        with:
+          node-version: 20
+          cache: npm
+      - uses: actions/setup-python@v5
+        if: ${{ env.ECOSYSTEM == 'pypi' }}
+        with:
+          python-version: '3.x'
+      - uses: dtolnay/rust-toolchain@stable
+        if: ${{ env.ECOSYSTEM == 'cargo' }}
+      - uses: actions/setup-go@v5
+        if: ${{ env.ECOSYSTEM == 'go' }}
+        with:
+          go-version: stable
+      - name: Apply dependency remediation
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$ECOSYSTEM" in
+            npm)
+              npm install --save-exact "${PACKAGE_NAME}@${TARGET_VERSION}"
+              ;;
+            pypi)
+              python - <<'PY'
+          import os, re
+          package = os.environ['PACKAGE_NAME']
+          target = os.environ['TARGET_VERSION']
+          file_name = os.environ.get('DEPENDENCY_FILE') or 'requirements.txt'
+          if not os.path.exists(file_name):
+              raise SystemExit(f'{file_name} is required for an automatic PyPI remediation')
+          text = open(file_name, encoding='utf-8').read()
+          pattern = rf'(?im)^(\s*{re.escape(package)})(?:\[[^\]]+\])?\s*(?:[=!<>~].*)?$'
+          updated, count = re.subn(pattern, rf'\1=={target}', text)
+          if count == 0:
+              raise SystemExit(f'Could not find a pinned {package} entry in {file_name}')
+          open(file_name, 'w', encoding='utf-8').write(updated)
+          PY
+              ;;
+            cargo)
+              cargo update -p "$PACKAGE_NAME" --precise "$TARGET_VERSION"
+              ;;
+            go)
+              go get "${PACKAGE_NAME}@${TARGET_VERSION}"
+              go mod tidy
+              ;;
+            maven)
+              mvn -B versions:use-dep-version -Dincludes="$PACKAGE_NAME" -DnewVersion="$TARGET_VERSION" -DgenerateBackupPoms=false
+              ;;
+            *)
+              echo "Unsupported remediation ecosystem: $ECOSYSTEM" >&2
+              exit 1
+              ;;
+          esac
+      - name: Run dependency tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$ECOSYSTEM" in
+            npm) [ ! -f package.json ] || npm test --if-present ;;
+            cargo) cargo test ;;
+            go) go test ./... ;;
+            maven) mvn -B test ;;
+            pypi) python -m compileall -q . ;;
+          esac
+      - name: Create remediation pull request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: radius/remediation/${{ env.PACKAGE_NAME }}-${{ env.TARGET_VERSION }}
+          delete-branch: true
+          title: "fix: upgrade ${{ env.PACKAGE_NAME }} to ${{ env.TARGET_VERSION }}"
+          commit-message: "fix: upgrade ${{ env.PACKAGE_NAME }} to ${{ env.TARGET_VERSION }}"
+          body: |
+            Radius detected `${{ env.ADVISORY_ID || 'a dependency advisory' }}` for `${{ env.PACKAGE_NAME }}@${{ env.CURRENT_VERSION }}`.
+
+            This pull request upgrades the dependency to `${{ env.TARGET_VERSION }}`, regenerates dependency evidence, and runs the ecosystem test command.
+          labels: |
+            security
+            dependencies

@@ -1,0 +1,46 @@
+name: Radius dependency scan
+
+on:
+  push:
+    paths:
+      - package-lock.json
+      - npm-shrinkwrap.json
+      - requirements.txt
+      - Pipfile.lock
+      - poetry.lock
+      - Cargo.lock
+      - go.mod
+      - pom.xml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  radius:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Send dependency evidence to Radius
+        env:
+          RADIUS_API_URL: ${{ secrets.RADIUS_API_URL }}
+          RADIUS_API_TOKEN: ${{ secrets.RADIUS_API_TOKEN }}
+          RADIUS_SERVICE_NAME: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          found=0
+          for file in package-lock.json npm-shrinkwrap.json requirements.txt Pipfile.lock poetry.lock Cargo.lock go.mod pom.xml; do
+            if [ -f "$file" ]; then
+              found=1
+              curl --fail-with-body --retry 3 --retry-delay 2 \
+                -H "Authorization: Bearer ${RADIUS_API_TOKEN}" \
+                -F "lockfile=@${file}" \
+                -F "serviceName=${RADIUS_SERVICE_NAME}" \
+                -F "capturedAt=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                -F "environment=production" \
+                "${RADIUS_API_URL}/api/ingest/lockfile"
+            fi
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "No supported dependency file found."
+          fi

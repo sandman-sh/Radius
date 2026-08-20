@@ -1,0 +1,16 @@
+{
+  "name": "@radius/api",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch --env-file=../../.env src/server.js",
+    "start": "node --env-file=../../.env src/server.js",
+    "test": "node --test test/contracts.test.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "multer": "^2.0.2"
+  }
+}
