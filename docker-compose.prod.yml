@@ -1,0 +1,78 @@
+services:
+  hydradb:
+    image: ghcr.io/hydra-db/hydradb:latest
+    container_name: radius-hydradb
+    restart: always
+    volumes:
+      - radius-data:/data
+    environment:
+      CLOUD_PROVIDER: local
+      LOCAL_PATH: /data/store
+      GRAPH_NAMESPACE: default
+      GRAPH_ID: default
+      GRAPH_CELL_ID: cell-0
+      GRAPH_CELLS: cell-0
+      GRAPH_NODE_ID: node-0
+      GRAPH_BOLT_NODE_ADDRESSES: node-0=127.0.0.1:7687
+      GRAPH_ADVERTISED_BOLT_ADDR: 127.0.0.1:7687
+      GRAPH_DATA_CACHE_DIR: /data/cache
+      GRAPH_AUTH_TOKEN_FILE: /data/auth-token
+      HYDRA_TOKEN: ${HYDRA_TOKEN}
+      GRAPH_ALLOW_PLAINTEXT: "true"
+      RUST_MIN_STACK: "33554432"
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["mkdir -p /data/store /data/cache && printf '%s\\n' \"$${HYDRA_TOKEN}\" > /data/auth-token && exec graph-node"]
+    networks:
+      - radius-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8443/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: radius-api
+    restart: always
+    depends_on:
+      hydradb:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 4100
+      RADIUS_REQUIRE_HYDRA: "true"
+      HYDRA_HTTP_URL: http://hydradb:8443
+      HYDRA_GRAPH_ID: ${HYDRA_GRAPH_ID:-default}
+      HYDRA_NAMESPACE: ${HYDRA_NAMESPACE:-default}
+      HYDRA_CELL_ID: ${HYDRA_CELL_ID:-cell-0}
+      HYDRA_TOKEN: ${HYDRA_TOKEN}
+      RADIUS_API_TOKEN: ${RADIUS_API_TOKEN}
+      RADIUS_WEBHOOK_SECRET: ${RADIUS_WEBHOOK_SECRET}
+      RADIUS_CORS_ORIGINS: ${RADIUS_CORS_ORIGINS:-}
+      RADIUS_GITHUB_TOKEN: ${RADIUS_GITHUB_TOKEN:-}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+    networks:
+      - radius-net
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    container_name: radius-web
+    restart: always
+    depends_on:
+      - api
+    ports:
+      - "80:80"
+    networks:
+      - radius-net
+
+networks:
+  radius-net:
+    driver: bridge
+
+volumes:
+  radius-data:
+    driver: local
