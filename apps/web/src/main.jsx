@@ -154,9 +154,188 @@ function ImpactView({ impact, registry, onExport }) {
 
 function GraphExplorer({ impact }) {
   const [selected, setSelected] = useState(null);
-  const graph = useMemo(() => { const map = new Map(); impact.paths.slice(0, 12).forEach((path) => path.vertices.forEach((node) => { if (!map.has(String(node.id))) map.set(String(node.id), node); })); const nodes = [...map.values()]; const root = nodes.find((node) => node.label === 'PackageVersion' && node.properties?.name === impact.incident.packageName && node.properties?.version === impact.incident.version) || { id: 'root', label: 'PackageVersion', properties: { name: impact.incident.packageName, version: impact.incident.version } }; if (!map.has(String(root.id))) nodes.push(root); const services = nodes.filter((node) => node.label === 'Service'); const packages = nodes.filter((node) => node.label === 'PackageVersion' && node.id !== root.id); const locks = nodes.filter((node) => node.label === 'Lockfile'); const positions = new Map([[String(root.id), { x: 465, y: 180 }]]); services.slice(0, 8).forEach((node, index) => positions.set(String(node.id), { x: 72, y: 47 + index * 37 })); locks.slice(0, 6).forEach((node, index) => positions.set(String(node.id), { x: 240, y: 65 + index * 57 })); packages.slice(0, 16).forEach((node, index) => positions.set(String(node.id), { x: 710, y: 26 + (index % 8) * 38 })); return { nodes, positions }; }, [impact]);
-  const lines = useMemo(() => { const items = []; impact.paths.slice(0, 12).forEach((path) => { const sequence = path.vertices.map((node) => graph.positions.get(String(node.id))).filter(Boolean); for (let index = 1; index < sequence.length; index += 1) items.push({ x1: sequence[index - 1].x, y1: sequence[index - 1].y, x2: sequence[index].x, y2: sequence[index].y, key: `${sequence[index - 1].x}-${sequence[index].x}-${index}` }); }); return items; }, [impact, graph.positions]);
-  return <div className="graph-explorer"><svg viewBox="0 0 860 350" role="img" aria-label="Interactive blast radius evidence graph">{lines.map(({ key, ...line }) => <line key={key} {...line} className="evidence-line"/>)}{graph.nodes.map((node) => { const point = graph.positions.get(String(node.id)); if (!point) return null; const type = node.label === 'Service' ? 'service' : node.label === 'PackageVersion' && node.properties?.name === impact.incident.packageName ? 'root' : node.label === 'Lockfile' ? 'lock' : 'package'; const label = type === 'root' ? 'ROOT' : node.label === 'Service' ? node.properties?.service || node.properties?.name : node.label === 'Lockfile' ? node.properties?.file_name || 'lockfile' : `${node.properties?.name || 'package'}${node.properties?.version ? `@${node.properties.version}` : ''}`; return <g key={node.id} className="graph-mark" onClick={() => setSelected({ ...node, label: label || node.label })}><circle cx={point.x} cy={point.y} r={type === 'root' ? 25 : type === 'service' ? 10 : 8} className={`graph-dot ${type}`}/><text x={point.x + (type === 'service' ? 16 : 0)} y={point.y + (type === 'root' ? 4 : type === 'service' ? 4 : 22)} textAnchor={type === 'service' ? 'start' : 'middle'} className={`graph-label ${type}`}>{String(label).slice(0, 24)}</text></g>; })}</svg><div className="graph-legend"><span><i className="legend-dot root"></i>Compromised version</span><span><i className="legend-dot service"></i>Service</span><span><i className="legend-dot lock"></i>Lockfile</span><span><i className="legend-dot package"></i>Dependency</span></div>{selected && <div className="node-detail"><span className="eyebrow">SELECTED EVIDENCE</span><strong>{selected.label}</strong><span>{selected.properties?.owner || selected.properties?.version || selected.properties?.captured_at || 'Graph entity'}</span><button onClick={() => setSelected(null)} aria-label="Close detail">×</button></div>}</div>;
+
+  const graph = useMemo(() => {
+    const map = new Map();
+    const getNodeKind = (node) => node.properties?.kind || (node.label !== 'Entity' ? node.label : null) || (node.properties?.service || node.properties?.owner ? 'Service' : node.properties?.file_name ? 'Lockfile' : 'PackageVersion');
+
+    (impact.paths || []).slice(0, 25).forEach((path) => {
+      (path.vertices || []).forEach((node) => {
+        const id = String(node.id);
+        if (!map.has(id)) {
+          map.set(id, { ...node, id, kind: getNodeKind(node) });
+        }
+      });
+    });
+
+    let rootNode = [...map.values()].find(
+      (n) => (n.kind === 'PackageVersion' || n.label === 'PackageVersion') &&
+             n.properties?.name === impact.incident.packageName &&
+             (!impact.incident.version || n.properties?.version === impact.incident.version)
+    );
+    if (!rootNode) {
+      rootNode = { id: 'root-pkg', kind: 'PackageVersion', label: 'PackageVersion', properties: { name: impact.incident.packageName, version: impact.incident.version } };
+      map.set('root-pkg', rootNode);
+    }
+
+    (impact.services || []).forEach((svc, i) => {
+      const id = String(svc.id || `svc-${i}`);
+      if (!map.has(id)) {
+        map.set(id, { id, kind: 'Service', label: 'Service', properties: { service: svc.name, name: svc.name, owner: svc.owner, environment: svc.environment, direct: svc.direct } });
+      }
+    });
+
+    (impact.lockfiles || []).forEach((lk, i) => {
+      const id = String(lk.id || `lock-${i}`);
+      if (!map.has(id)) {
+        map.set(id, { id, kind: 'Lockfile', label: 'Lockfile', properties: { file_name: lk.name || 'package-lock.json', name: lk.name } });
+      }
+    });
+
+    (impact.dependentVersions || []).forEach((dep, i) => {
+      const id = String(dep.id || `dep-${i}`);
+      if (!map.has(id) && dep.name !== impact.incident.packageName) {
+        map.set(id, { id, kind: 'PackageVersion', label: 'PackageVersion', properties: { name: dep.name, version: dep.version } });
+      }
+    });
+
+    const nodes = [...map.values()];
+    const services = nodes.filter((n) => n.kind === 'Service');
+    const lockfiles = nodes.filter((n) => n.kind === 'Lockfile');
+    const packages = nodes.filter((n) => n.kind === 'PackageVersion' && n.id !== rootNode.id);
+
+    const positions = new Map();
+    positions.set(String(rootNode.id), { x: 470, y: 175 });
+
+    services.forEach((node, idx) => {
+      const count = Math.max(services.length, 1);
+      const spacing = count === 1 ? 175 : 70 + idx * Math.min(65, 230 / (count - 1 || 1));
+      positions.set(String(node.id), { x: 90, y: spacing });
+    });
+
+    lockfiles.forEach((node, idx) => {
+      const count = Math.max(lockfiles.length, 1);
+      const spacing = count === 1 ? 175 : 85 + idx * Math.min(75, 200 / (count - 1 || 1));
+      positions.set(String(node.id), { x: 275, y: spacing });
+    });
+
+    packages.slice(0, 12).forEach((node, idx) => {
+      positions.set(String(node.id), { x: 720, y: 45 + (idx % 7) * 45 });
+    });
+
+    return { nodes, positions, rootNode, services, lockfiles, packages };
+  }, [impact]);
+
+  const lines = useMemo(() => {
+    const items = [];
+    const drawn = new Set();
+
+    const addLine = (n1, n2) => {
+      const p1 = graph.positions.get(String(n1));
+      const p2 = graph.positions.get(String(n2));
+      if (p1 && p2) {
+        const key = `${p1.x},${p1.y}->${p2.x},${p2.y}`;
+        if (!drawn.has(key)) {
+          drawn.add(key);
+          items.push({ x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, key });
+        }
+      }
+    };
+
+    (impact.paths || []).slice(0, 20).forEach((path) => {
+      const verts = (path.vertices || []).map((v) => String(v.id));
+      for (let i = 1; i < verts.length; i++) {
+        addLine(verts[i - 1], verts[i]);
+      }
+    });
+
+    graph.services.forEach((s) => {
+      if (graph.lockfiles.length > 0) {
+        graph.lockfiles.forEach((lk) => addLine(s.id, lk.id));
+      } else {
+        addLine(s.id, graph.rootNode.id);
+      }
+    });
+
+    graph.lockfiles.forEach((lk) => {
+      addLine(lk.id, graph.rootNode.id);
+      graph.packages.forEach((pkg) => addLine(lk.id, pkg.id));
+    });
+
+    graph.packages.forEach((pkg) => {
+      addLine(pkg.id, graph.rootNode.id);
+    });
+
+    return items;
+  }, [impact, graph]);
+
+  return (
+    <div className="graph-explorer">
+      <svg viewBox="0 0 880 350" role="img" aria-label="Interactive blast radius evidence graph">
+        <defs>
+          <linearGradient id="edge-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor="rgba(200, 90, 80, 0.45)" />
+            <stop offset="50%" stopColor="rgba(195, 159, 69, 0.45)" />
+            <stop offset="100%" stopColor="rgba(168, 85, 247, 0.55)" />
+          </linearGradient>
+        </defs>
+        {lines.map(({ key, ...line }) => (
+          <line key={key} {...line} className="evidence-line" stroke="url(#edge-grad)" strokeWidth="1.5" strokeDasharray="3 3" />
+        ))}
+        {graph.nodes.map((node) => {
+          const point = graph.positions.get(String(node.id));
+          if (!point) return null;
+          const isRoot = node.id === graph.rootNode.id || (node.kind === 'PackageVersion' && node.properties?.name === impact.incident.packageName);
+          const type = isRoot ? 'root' : node.kind === 'Service' ? 'service' : node.kind === 'Lockfile' ? 'lock' : 'package';
+          const label = isRoot
+            ? `${impact.incident.packageName}@${impact.incident.version || ''}`
+            : node.kind === 'Service'
+            ? node.properties?.service || node.properties?.name
+            : node.kind === 'Lockfile'
+            ? node.properties?.file_name || 'package-lock.json'
+            : `${node.properties?.name || 'package'}${node.properties?.version ? `@${node.properties.version}` : ''}`;
+
+          return (
+            <g key={node.id} className="graph-mark" onClick={() => setSelected({ ...node, label: label || node.kind })}>
+              <circle
+                cx={point.x}
+                cy={point.y}
+                r={type === 'root' ? 24 : type === 'service' ? 12 : 9}
+                className={`graph-dot ${type}`}
+              />
+              <text
+                x={point.x + (type === 'service' ? 18 : 0)}
+                y={point.y + (type === 'root' ? 4 : type === 'service' ? 4 : 22)}
+                textAnchor={type === 'service' ? 'start' : 'middle'}
+                className={`graph-label ${type}`}
+              >
+                {type === 'root' ? 'ROOT' : String(label).slice(0, 22)}
+              </text>
+              {type === 'root' && (
+                <text x={point.x} y={point.y + 36} textAnchor="middle" fill="#c084fc" fontSize="10" fontFamily="monospace">
+                  {String(label).slice(0, 24)}
+                </text>
+              )}
+            </g>
+          );
+        })}
+      </svg>
+      <div className="graph-legend">
+        <span><i className="legend-dot root"></i>Compromised version</span>
+        <span><i className="legend-dot service"></i>Service</span>
+        <span><i className="legend-dot lock"></i>Lockfile</span>
+        <span><i className="legend-dot package"></i>Dependency</span>
+      </div>
+      {selected && (
+        <div className="node-detail">
+          <span className="eyebrow">SELECTED EVIDENCE</span>
+          <strong>{selected.label}</strong>
+          <span>{selected.properties?.owner || selected.properties?.version || selected.properties?.environment || selected.properties?.captured_at || 'Graph entity'}</span>
+          <button onClick={() => setSelected(null)} aria-label="Close detail">×</button>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function Timeline({ timeline = [] }) { return <div className="timeline">{timeline.map((item, index) => <div className="timeline-event" key={`${item.label}-${index}`}><div className={`timeline-marker ${item.tone}`}></div><div><strong>{item.label}</strong><span>{formatTime(item.at)}</span></div></div>)}</div>; }

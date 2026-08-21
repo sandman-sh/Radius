@@ -97,7 +97,20 @@ function buildEvidencePath(service, lock, rootId, dependentEdges, nodeById, allE
 function buildTimeline({ startsAt, endsAt, services }) { return [{ label: 'Incident declared', at: startsAt, tone: 'incident' }, ...services.filter((service) => service.exposedFrom).slice(0, 8).map((service) => ({ label: `${service.name} observed`, at: service.exposedFrom, tone: 'service' })), { label: 'Window closes', at: endsAt, tone: 'close' }].sort((a, b) => String(a.at).localeCompare(String(b.at))); }
 function overlaps(activeFrom, activeTo, startsAt, endsAt) { const from = Date.parse(activeFrom || startsAt || '') || 0; const to = Date.parse(activeTo || activeFrom || endsAt || '') || from; const incidentFrom = Date.parse(startsAt || '') || from; const incidentTo = Date.parse(endsAt || '') || to; return from <= incidentTo && to >= incidentFrom; }
 function sharedValues(rootValues = [], affectedValues = []) { const affected = new Set(affectedValues); return [...new Set(rootValues)].filter((value) => affected.has(value)); }
-function pathToUi(path) { return { vertices: (path.nodes || []).map((vertex) => ({ id: vertex.id, label: vertex.labels?.[0] || 'Entity', properties: normalizeProperties(vertex.properties) })), relationships: (path.relationships || []).map((relationship) => ({ id: relationship.id, type: relationship.edge_type, properties: normalizeProperties(relationship.properties) })) }; }
+function pathToUi(path) {
+  return {
+    vertices: (path.nodes || []).map((vertex) => {
+      const props = normalizeProperties(vertex.properties);
+      const kind = props.kind || props.label || (vertex.labels && vertex.labels.find((l) => l !== 'Entity')) || vertex.labels?.[0] || 'Entity';
+      return { id: vertex.id, label: kind, properties: props };
+    }),
+    relationships: (path.relationships || []).map((relationship) => ({
+      id: relationship.id,
+      type: relationship.edge_type,
+      properties: normalizeProperties(relationship.properties)
+    }))
+  };
+}
 function normalizeProperties(properties = {}) { return Object.fromEntries(Object.entries(properties).map(([key, value]) => [key, normalizeProperty(value)])); }
 function normalizeProperty(value) { if (!value || typeof value !== 'object') return value; const entries = Object.entries(value); return entries.length === 1 ? entries[0][1] : value; }
 
