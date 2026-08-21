@@ -158,6 +158,7 @@ function GraphExplorer({ impact }) {
   const [draggingId, setDraggingId] = useState(null);
   const svgRef = useRef(null);
   const dragRef = useRef(null);
+  const rafRef = useRef(null);
 
   const graph = useMemo(() => {
     const map = new Map();
@@ -227,10 +228,22 @@ function GraphExplorer({ impact }) {
       }
     });
 
-    const nodes = [...map.values()];
-    const services = nodes.filter((n) => n.kind === 'Service');
-    const lockfiles = nodes.filter((n) => n.kind === 'Lockfile');
-    const packages = nodes.filter((n) => n.kind === 'PackageVersion' && n.id !== rootNode.id);
+    const services = [];
+    const lockfiles = [];
+    const packages = [];
+    for (const [, node] of map) {
+      if (node.id === rootNode.id) continue;
+      if (node.kind === 'Service') services.push(node);
+      else if (node.kind === 'Lockfile') lockfiles.push(node);
+      else packages.push(node);
+    }
+
+    if (services.length === 0) {
+      services.push({ id: 'svc-default', kind: 'Service', properties: { service: impact.incident.serviceName || 'default-service' } });
+    }
+    if (lockfiles.length === 0) {
+      lockfiles.push({ id: 'lk-default', kind: 'Lockfile', properties: { file_name: 'package-lock.json' } });
+    }
 
     const defaultPositions = new Map();
     defaultPositions.set(String(rootNode.id), { x: 450, y: 190 });
@@ -278,6 +291,7 @@ function GraphExplorer({ impact }) {
 
   const handleMouseDown = (nodeId, e) => {
     e.stopPropagation();
+    e.preventDefault();
     const svgPt = getSvgPoint(e);
     const currentPos = customPositions[nodeId] || graph.defaultPositions.get(String(nodeId)) || { x: 450, y: 190 };
     dragRef.current = {
@@ -291,24 +305,39 @@ function GraphExplorer({ impact }) {
   };
 
   const handleMouseMove = (e) => {
-    if (!dragRef.current) return;
-    const svgPt = getSvgPoint(e);
-    const dx = svgPt.x - dragRef.current.startX;
-    const dy = svgPt.y - dragRef.current.startY;
-    const newX = Math.round(Math.max(25, Math.min(915, dragRef.current.nodeStartX + dx)));
-    const newY = Math.round(Math.max(25, Math.min(355, dragRef.current.nodeStartY + dy)));
-    setCustomPositions((prev) => ({
-      ...prev,
-      [dragRef.current.id]: { x: newX, y: newY }
-    }));
+    const drag = dragRef.current;
+    if (!drag) return;
+    e.preventDefault();
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    rafRef.current = requestAnimationFrame(() => {
+      const currentDrag = dragRef.current;
+      if (!currentDrag) return;
+      const svgPt = getSvgPoint(e);
+      const dx = svgPt.x - currentDrag.startX;
+      const dy = svgPt.y - currentDrag.startY;
+      const newX = Math.max(25, Math.min(915, currentDrag.nodeStartX + dx));
+      const newY = Math.max(25, Math.min(355, currentDrag.nodeStartY + dy));
+      const nodeId = currentDrag.id;
+      setCustomPositions((prev) => ({
+        ...prev,
+        [nodeId]: { x: newX, y: newY }
+      }));
+    });
   };
 
   const handleMouseUp = () => {
+    if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
     dragRef.current = null;
     setDraggingId(null);
   };
 
   const getNodePos = (id) => customPositions[String(id)] || graph.defaultPositions.get(String(id)) || { x: 450, y: 190 };
+
+  const makeCurvePath = (x1, y1, x2, y2) => {
+    const dx = x2 - x1;
+    const cpOffset = Math.min(Math.abs(dx) * 0.45, 120);
+    return `M${x1},${y1} C${x1 + cpOffset},${y1} ${x2 - cpOffset},${y2} ${x2},${y2}`;
+  };
 
   const lines = useMemo(() => {
     const items = [];
@@ -318,7 +347,7 @@ function GraphExplorer({ impact }) {
       const p1 = getNodePos(n1);
       const p2 = getNodePos(n2);
       if (p1 && p2) {
-        const key = `${p1.x},${p1.y}->${p2.x},${p2.y}`;
+        const key = `${n1}->${n2}`;
         if (!drawn.has(key)) {
           drawn.add(key);
           items.push({ x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, key });
@@ -374,6 +403,7 @@ function GraphExplorer({ impact }) {
         viewBox="0 0 940 380"
         role="img"
         aria-label="Interactive blast radius evidence graph"
+        className={draggingId ? 'is-dragging' : ''}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
@@ -392,8 +422,8 @@ function GraphExplorer({ impact }) {
           </filter>
         </defs>
 
-        {lines.map(({ key, ...line }) => (
-          <line key={key} {...line} className="evidence-line" stroke="url(#edge-grad)" strokeWidth="1.8" strokeDasharray="3 3" />
+        {lines.map(({ key, x1, y1, x2, y2 }) => (
+          <path key={key} d={makeCurvePath(x1, y1, x2, y2)} className="evidence-line" stroke="url(#edge-grad)" strokeWidth="1.8" fill="none" />
         ))}
 
         {graph.nodes.map((node) => {
