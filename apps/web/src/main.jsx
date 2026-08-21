@@ -27,11 +27,19 @@ function App() {
 
   useEffect(() => { document.documentElement.dataset.theme = theme; try { localStorage.setItem('radius-theme', theme); } catch { /* storage is optional */ } }, [theme]);
 
+  const [integrationsStatus, setIntegrationsStatus] = useState(null);
+
   const refresh = async () => {
-    const [healthResponse, statsResponse, overviewResponse] = await Promise.all([apiFetch('/api/health'), apiFetch('/api/stats'), apiFetch('/api/overview')]);
+    const [healthResponse, statsResponse, overviewResponse, integrationsResponse] = await Promise.all([
+      apiFetch('/api/health'),
+      apiFetch('/api/stats'),
+      apiFetch('/api/overview'),
+      apiFetch('/api/integrations/status')
+    ]);
     setHealth(await healthResponse.json());
     if (statsResponse.ok) setStats(await statsResponse.json());
     if (overviewResponse.ok) setOverview(await overviewResponse.json());
+    if (integrationsResponse.ok) setIntegrationsStatus(await integrationsResponse.json());
   };
   useEffect(() => { refresh().catch((error) => setHealth({ hydradb: 'offline', storage: 'local-persistent', error: error.message })); }, []);
 
@@ -106,15 +114,21 @@ function App() {
   return <div className="shell">
     <header className="topbar">
       <button className="brand brand-button" onClick={() => setLaunched(false)} aria-label="Return to Radius home"><span className="brand-mark"><RadiusMark /></span><span>Radius</span></button>
-      <nav className="main-nav" aria-label="Primary"><button className={view === 'overview' ? 'nav-item active' : 'nav-item'} onClick={() => setView('overview')}>Overview</button><button className={view === 'investigate' ? 'nav-item active' : 'nav-item'} onClick={() => setView('investigate')}>Investigate</button><button className={view === 'evidence' ? 'nav-item active' : 'nav-item'} onClick={() => setView('evidence')} disabled={!impact}>Evidence</button></nav>
+      <nav className="main-nav" aria-label="Primary">
+        <button className={view === 'overview' ? 'nav-item active' : 'nav-item'} onClick={() => setView('overview')}>Overview</button>
+        <button className={view === 'investigate' ? 'nav-item active' : 'nav-item'} onClick={() => setView('investigate')}>Investigate</button>
+        <button className={view === 'evidence' ? 'nav-item active' : 'nav-item'} onClick={() => setView('evidence')} disabled={!impact}>Evidence</button>
+        <button className={view === 'integrations' ? 'nav-item active' : 'nav-item'} onClick={() => setView('integrations')}>Integrations</button>
+      </nav>
       <div className="topbar-right"><span className={`status-dot ${health?.hydradb === 'ok' ? 'online' : 'offline'}`}></span><span>{health?.hydradb === 'ok' ? 'HydraDB connected' : 'HydraDB unavailable'}</span><span className="version">v0.3</span><ThemeToggle theme={theme} onToggle={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')} /></div>
     </header>
     <main>
-      <section className="console-heading"><div><div className="eyebrow">INCIDENT COMMAND CENTER</div><h1>{view === 'evidence' && impact ? 'The radius, with proof.' : view === 'investigate' ? 'Start with the facts.' : 'Know what is exposed.'}</h1><p>{view === 'evidence' && impact ? `A bounded evidence graph for ${impact.incident.packageName}@${impact.incident.version}.` : 'Connect real service snapshots, declare a package event, and move from signal to action in minutes.'}</p></div><div className="heading-actions"><span className="system-chip"><span className="pulse"></span>{stats.mode === 'hydradb' ? 'Graph synchronized' : 'Persistent local graph'}</span>{impact && <button className="button dark compact" onClick={() => downloadReport({ incident, impact, registry })}>Export brief <span>↗</span></button>}</div></section>
+      <section className="console-heading"><div><div className="eyebrow">INCIDENT COMMAND CENTER</div><h1>{view === 'evidence' && impact ? 'The radius, with proof.' : view === 'investigate' ? 'Start with the facts.' : view === 'integrations' ? 'Connect your ecosystem.' : 'Know what is exposed.'}</h1><p>{view === 'evidence' && impact ? `A bounded evidence graph for ${impact.incident.packageName}@${impact.incident.version}.` : view === 'integrations' ? 'Monitor GitHub repositories, trigger Slack advisory alerts, and synchronize live CI/CD deployments.' : 'Connect real service snapshots, declare a package event, and move from signal to action in minutes.'}</p></div><div className="heading-actions"><span className="system-chip"><span className="pulse"></span>{stats.mode === 'hydradb' ? 'Graph synchronized' : 'Persistent local graph'}</span>{impact && <button className="button dark compact" onClick={() => downloadReport({ incident, impact, registry })}>Export brief <span>↗</span></button>}</div></section>
       {notice && <div className={`notice ${notice.kind}`}><span>{notice.text}</span><button onClick={() => setNotice(null)} aria-label="Dismiss">×</button></div>}
       {view === 'overview' && <OverviewView stats={stats} overview={overview} impact={impact} advisories={advisories} remediation={remediation} onPlanRemediation={planRemediation} onDispatchRemediation={async (repository) => { if (!remediation) return; setBusy(true); setNotice(null); try { const response = await apiFetch('/api/remediation/github', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repository, packageName: remediation.packageName, version: remediation.fromVersion, targetVersion: remediation.targetVersion, ecosystem: remediation.ecosystem, advisoryId: remediation.advisoryId }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); setNotice({ kind: 'success', text: `GitHub remediation dispatched for ${repository}.` }); } catch (error) { setNotice({ kind: 'error', text: error.message }); } finally { setBusy(false); } }} onInvestigate={() => setView('investigate')} />}
       {view === 'investigate' && <InvestigationView serviceMeta={serviceMeta} updateService={updateService} file={file} setFile={setFile} onIngest={ingest} incident={incident} updateIncident={updateIncident} onInvestigate={investigate} busy={busy} hydraReady={health?.hydradb === 'ok' || health?.security?.requireHydra !== true} impact={impact} detectedPackages={detectedPackages} onSelectPackage={selectPackage} onSyncTime={syncTime} />}
       {view === 'evidence' && impact && <ImpactView impact={impact} registry={registry} onExport={() => downloadReport({ incident, impact, registry })} />}
+      {view === 'integrations' && <IntegrationsView integrationsStatus={integrationsStatus} health={health} onRefresh={refresh} onNotice={setNotice} />}
     </main>
     <footer><span>RADIUS</span><span>Graph-native incident response</span><span>HydraDB · npm registry · evidence first</span></footer>
   </div>;
@@ -553,5 +567,214 @@ function formatNumber(value) { return Number(value || 0).toLocaleString(); }
 function formatTime(value) { if (!value) return '—'; const date = new Date(value); return Number.isNaN(date.valueOf()) ? value : date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); }
 function duration(start, end) { const delta = Math.max(0, (Date.parse(end) || 0) - (Date.parse(start) || 0)); const minutes = Math.round(delta / 60000); return minutes ? `${minutes} min` : 'live window'; }
 function downloadReport(payload) { const blob = new Blob([JSON.stringify({ generatedAt: new Date().toISOString(), ...payload }, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = `radius-${payload.incident.packageName}-${payload.incident.version}-brief.json`; link.click(); URL.revokeObjectURL(url); }
+
+function IntegrationsView({ integrationsStatus, health, onRefresh, onNotice }) {
+  const [testingSlack, setTestingSlack] = useState(false);
+  const [testRepo, setTestRepo] = useState('');
+  const [testPkg, setTestPkg] = useState('lodash');
+  const [testVer, setTestVer] = useState('4.17.21');
+  const [dispatchingGithub, setDispatchingGithub] = useState(false);
+
+  const handleTestSlack = async () => {
+    setTestingSlack(true);
+    try {
+      const res = await apiFetch('/api/integrations/slack/test', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) {
+        if (data.status === 'not_configured') {
+          onNotice({ kind: 'error', text: 'SLACK_WEBHOOK_URL is not configured in your .env file yet.' });
+        } else {
+          throw new Error(data.error || 'Slack notification failed');
+        }
+      } else {
+        onNotice({ kind: 'success', text: 'Slack test alert delivered successfully!' });
+      }
+    } catch (err) {
+      onNotice({ kind: 'error', text: err.message });
+    } finally {
+      setTestingSlack(false);
+      onRefresh();
+    }
+  };
+
+  const handleDispatchGithub = async (e) => {
+    e.preventDefault();
+    if (!testRepo.trim()) {
+      return onNotice({ kind: 'error', text: 'Enter a valid repository in owner/repo format.' });
+    }
+    setDispatchingGithub(true);
+    try {
+      const res = await apiFetch('/api/remediation/github', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          repository: testRepo.trim(),
+          packageName: testPkg.trim(),
+          version: '4.17.20',
+          targetVersion: testVer.trim(),
+          ecosystem: 'npm',
+          advisoryId: 'GHSA-35jh-r3h4-6jhm'
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'GitHub dispatch failed');
+      onNotice({ kind: 'success', text: `GitHub remediation dispatched to ${testRepo} (workflow: ${data.dispatch?.workflow || 'radius-remediate.yml'}).` });
+    } catch (err) {
+      onNotice({ kind: 'error', text: err.message });
+    } finally {
+      setDispatchingGithub(false);
+    }
+  };
+
+  const hasSlack = integrationsStatus?.notifications?.slack?.configured;
+  const hasGithubToken = integrationsStatus?.github?.tokenConfigured;
+  const isHydraReady = health?.hydradb === 'ok';
+
+  return (
+    <div className="integrations-view">
+      <div className="integrations-grid">
+        {/* GitHub Card */}
+        <article className="panel integration-card">
+          <div className="integration-card-header">
+            <div className="integration-icon-wrap github">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+            </div>
+            <div>
+              <h3>GitHub Integration</h3>
+              <small>Automated PR remediation & webhook ingestion</small>
+            </div>
+            <span className={`status-pill ${hasGithubToken ? 'green' : 'amber'}`}>
+              <span className="dot"></span>{hasGithubToken ? 'Token Active' : 'Token Optional'}
+            </span>
+          </div>
+
+          <p className="integration-desc">
+            Connect GitHub to receive push webhooks for automatic dependency lockfile ingestion, and dispatch automated PR upgrades for vulnerable packages.
+          </p>
+
+          <div className="integration-section">
+            <label className="section-label">WEBHOOK INGESTION ENDPOINT</label>
+            <div className="code-box">
+              <code>POST http://localhost:4102/api/integrations/github</code>
+            </div>
+            <span className="hint-text">Add this URL to your GitHub Repo Webhooks with content-type <code>application/json</code>.</span>
+          </div>
+
+          <div className="integration-section">
+            <label className="section-label">TEST REMEDIATION DISPATCH (OPEN PR)</label>
+            <form onSubmit={handleDispatchGithub} className="dispatch-form">
+              <input
+                type="text"
+                placeholder="owner/repo (e.g. your-org/core-service)"
+                value={testRepo}
+                onChange={(e) => setTestRepo(e.target.value)}
+                className="input-field"
+              />
+              <div className="dispatch-row">
+                <input
+                  type="text"
+                  placeholder="Package"
+                  value={testPkg}
+                  onChange={(e) => setTestPkg(e.target.value)}
+                  className="input-field compact"
+                />
+                <input
+                  type="text"
+                  placeholder="Target Ver"
+                  value={testVer}
+                  onChange={(e) => setTestVer(e.target.value)}
+                  className="input-field compact"
+                />
+                <button type="submit" className="button dark compact" disabled={dispatchingGithub}>
+                  {dispatchingGithub ? 'Dispatching...' : 'Dispatch PR ↗'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </article>
+
+        {/* Slack Card */}
+        <article className="panel integration-card">
+          <div className="integration-card-header">
+            <div className="integration-icon-wrap slack">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zM6.313 15.165a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zM8.834 6.313a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312zM18.956 8.834a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zM17.688 8.834a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.165 0a2.528 2.528 0 0 1 2.523 2.522v6.312zM15.165 18.956a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.165 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52zM15.165 17.688a2.527 2.527 0 0 1-2.52-2.523 2.526 2.526 0 0 1 2.52-2.52h6.313A2.527 2.527 0 0 1 24 15.165a2.528 2.528 0 0 1-2.522 2.523h-6.313z"/></svg>
+            </div>
+            <div>
+              <h3>Slack Alert Notifications</h3>
+              <small>Live incident alerts & blast radius broadcasts</small>
+            </div>
+            <span className={`status-pill ${hasSlack ? 'green' : 'gray'}`}>
+              <span className="dot"></span>{hasSlack ? 'Active' : 'Not Configured'}
+            </span>
+          </div>
+
+          <p className="integration-desc">
+            Radius sends high-priority security broadcasts directly to your SOC / DevOps Slack channel whenever an incident is declared or an OSV advisory is found.
+          </p>
+
+          <div className="integration-section">
+            <label className="section-label">AUTOMATIC TRIGGERS</label>
+            <ul className="trigger-list">
+              <li>🚨 <strong>Incident Declared:</strong> Broadcasts exposed services & blast radius paths.</li>
+              <li>🛡️ <strong>Live Advisory:</strong> Alerts on high-severity OSV CVEs found in lockfiles.</li>
+            </ul>
+          </div>
+
+          <div className="integration-section">
+            <label className="section-label">CONFIGURATION (.env)</label>
+            <div className="code-box">
+              <code>SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...</code>
+            </div>
+          </div>
+
+          <div className="integration-footer">
+            <button
+              type="button"
+              className="button dark"
+              onClick={handleTestSlack}
+              disabled={testingSlack}
+            >
+              {testingSlack ? 'Sending Test...' : 'Send Test Slack Alert ↗'}
+            </button>
+          </div>
+        </article>
+
+        {/* HydraDB Card */}
+        <article className="panel integration-card">
+          <div className="integration-card-header">
+            <div className="integration-icon-wrap hydra">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9"/><path d="M12 3v18M3 12h18"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>
+            </div>
+            <div>
+              <h3>HydraDB Knowledge Graph</h3>
+              <small>Real-time graph engine & path traversal</small>
+            </div>
+            <span className={`status-pill ${isHydraReady ? 'green' : 'red'}`}>
+              <span className="dot"></span>{isHydraReady ? 'Connected' : 'Offline'}
+            </span>
+          </div>
+
+          <p className="integration-desc">
+            All services, lockfile versions, and reverse dependency paths are indexed into a persistent HydraDB graph instance for microsecond blast radius calculations.
+          </p>
+
+          <div className="integration-section">
+            <label className="section-label">ENDPOINTS</label>
+            <div className="kv-row"><span>HTTP API:</span><strong>http://localhost:8443</strong></div>
+            <div className="kv-row"><span>Bolt Protocol:</span><strong>bolt://localhost:7687</strong></div>
+            <div className="kv-row"><span>Graph Namespace:</span><strong>default (cell-0)</strong></div>
+          </div>
+
+          <div className="integration-section">
+            <label className="section-label">GENERIC CI/CD WEBHOOK</label>
+            <div className="code-box">
+              <code>POST http://localhost:4102/api/integrations/deployment</code>
+            </div>
+          </div>
+        </article>
+      </div>
+    </div>
+  );
+}
 
 createRoot(document.getElementById('root')).render(<App/>);
