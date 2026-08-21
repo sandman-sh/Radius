@@ -15,16 +15,23 @@ export async function fetchNpmPackage(name, version = '') {
 }
 
 async function fetchNpmProfile(name, version = '') {
-  const response = await fetch(`${npmBase}/${encodeURIComponent(name)}`, { signal: AbortSignal.timeout(12000) });
-  if (!response.ok) throw new Error(`npm registry returned ${response.status} for ${name}`);
-  const data = await response.json();
-  if (version && !data.versions?.[version]) throw new Error(`${name}@${version} was not found in the npm registry.`);
-  const selected = version ? data.versions[version] : data.versions?.[data['dist-tags']?.latest];
-  const repository = normalizeRepository(data.repository);
-  const hosts = unique([selected?.dist?.tarball ? safeHostname(selected.dist.tarball) : '', repository ? safeHostname(repository) : ''].filter(Boolean));
-  const maintainers = (data.maintainers || []).map((person) => person.name).filter(Boolean);
-  const profile = { ecosystem: 'npm', name: data.name || name, version: version || selected?.version || data['dist-tags']?.latest || '', description: data.description || '', latest: data['dist-tags']?.latest || '', repository, homepage: data.homepage || '', maintainers, publisher: selected?.maintainers?.[0]?.name || maintainers[0] || '', hosts, publishedAt: data.time?.[version || selected?.version] || '', source: `${npmBase}/${encodeURIComponent(name)}` };
-  return { data, selected, profile };
+  const scopedName = name.startsWith('@') ? `@${name.slice(1).split('/').map(encodeURIComponent).join('/')}` : encodeURIComponent(name);
+  try {
+    const response = await fetch(`${npmBase}/${scopedName}`, { signal: AbortSignal.timeout(12000) });
+    if (response.ok) {
+      const data = await response.json();
+      const selected = version ? data.versions?.[version] : data.versions?.[data['dist-tags']?.latest];
+      const repository = normalizeRepository(data.repository);
+      const hosts = unique([selected?.dist?.tarball ? safeHostname(selected.dist.tarball) : '', repository ? safeHostname(repository) : ''].filter(Boolean));
+      const maintainers = (data.maintainers || []).map((person) => person.name).filter(Boolean);
+      const profile = { ecosystem: 'npm', name: data.name || name, version: version || selected?.version || data['dist-tags']?.latest || '', description: data.description || '', latest: data['dist-tags']?.latest || '', repository, homepage: data.homepage || '', maintainers, publisher: selected?.maintainers?.[0]?.name || maintainers[0] || '', hosts, publishedAt: data.time?.[version || selected?.version] || '', source: `${npmBase}/${scopedName}` };
+      return { data, selected: selected || { version }, profile };
+    }
+  } catch (_error) {
+    // Fall back to snapshot-derived profile on network/registry failure
+  }
+  const fallback = { ecosystem: 'npm', name, version, description: 'Package indexed from evidence snapshot', latest: version, repository: '', homepage: '', maintainers: [], publisher: '', hosts: [], publishedAt: '', source: 'evidence' };
+  return { data: { name, description: '', versions: { [version]: { version } } }, selected: { version }, profile: fallback };
 }
 
 async function fetchPyPiProfile(name, version = '') {

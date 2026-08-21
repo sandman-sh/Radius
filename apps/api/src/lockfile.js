@@ -24,16 +24,35 @@ export function parseDependencyFile(text, fileName = 'dependencies.json', reques
 function parseNpmLock(document, fileName) {
   const packages = document.packages;
   if (packages && typeof packages === 'object') {
-    const entries = Object.entries(packages).filter(([path, entry]) => path !== '' && entry?.name && entry?.version).map(([path, entry]) => ({ path, name: entry.name, version: normalizeVersion(entry.version), dependencies: entry.dependencies || {} }));
+    const entries = Object.entries(packages)
+      .filter(([path, entry]) => path !== '' && entry?.version)
+      .map(([path, entry]) => {
+        const name = entry.name || path.replace(/^.*node_modules\//, '');
+        return {
+          path,
+          name,
+          version: normalizeVersion(entry.version),
+          dependencies: { ...(entry.dependencies || {}), ...(entry.devDependencies || {}) }
+        };
+      })
+      .filter((entry) => Boolean(entry.name) && Boolean(entry.version));
     const byPath = new Map(entries.map((entry) => [entry.path, entry]));
     const root = packages[''] || {};
     const rootDeps = { ...(root.dependencies || {}), ...(root.devDependencies || {}) };
     const edges = [];
-    for (const entry of entries) for (const dependencyName of Object.keys(entry.dependencies)) {
-      const nested = `${entry.path}/node_modules/${dependencyName}`; const top = `node_modules/${dependencyName}`; const resolvedPath = byPath.has(nested) ? nested : top; const target = byPath.get(resolvedPath);
-      if (target) edges.push({ from: entry, to: target, requested: entry.dependencies[dependencyName] });
+    for (const entry of entries) {
+      for (const [dependencyName, requested] of Object.entries(entry.dependencies || {})) {
+        const nested = `${entry.path}/node_modules/${dependencyName}`;
+        const top = `node_modules/${dependencyName}`;
+        const resolvedPath = byPath.has(nested) ? nested : byPath.has(top) ? top : null;
+        const target = resolvedPath ? byPath.get(resolvedPath) : null;
+        if (target) edges.push({ from: entry, to: target, requested: String(requested || '') });
+      }
     }
-    const roots = Object.entries(rootDeps).map(([name, requested]) => { const target = byPath.get(`node_modules/${name}`); return target ? { name, requested, target } : null; }).filter(Boolean);
+    const roots = Object.entries(rootDeps).map(([name, requested]) => {
+      const target = byPath.get(`node_modules/${name}`);
+      return target ? { name, requested, target } : null;
+    }).filter(Boolean);
     return { ecosystem: 'npm', fileName, format: 'package-lock', lockfileVersion: document.lockfileVersion || 1, entries, edges, roots };
   }
   return parseLegacyNpmLock(document, fileName);
