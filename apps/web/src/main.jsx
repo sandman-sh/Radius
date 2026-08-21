@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './fonts.css';
 import './styles.css';
@@ -154,12 +154,19 @@ function ImpactView({ impact, registry, onExport }) {
 
 function GraphExplorer({ impact }) {
   const [selected, setSelected] = useState(null);
+  const [customPositions, setCustomPositions] = useState({});
+  const [draggingId, setDraggingId] = useState(null);
+  const svgRef = useRef(null);
+  const dragRef = useRef(null);
 
   const graph = useMemo(() => {
     const map = new Map();
-    const getNodeKind = (node) => node.properties?.kind || (node.label !== 'Entity' ? node.label : null) || (node.properties?.service || node.properties?.owner ? 'Service' : node.properties?.file_name ? 'Lockfile' : 'PackageVersion');
+    const getNodeKind = (node) =>
+      node.properties?.kind ||
+      (node.label !== 'Entity' ? node.label : null) ||
+      (node.properties?.service || node.properties?.owner ? 'Service' : node.properties?.file_name ? 'Lockfile' : 'PackageVersion');
 
-    (impact.paths || []).slice(0, 25).forEach((path) => {
+    (impact.paths || []).slice(0, 30).forEach((path) => {
       (path.vertices || []).forEach((node) => {
         const id = String(node.id);
         if (!map.has(id)) {
@@ -169,33 +176,54 @@ function GraphExplorer({ impact }) {
     });
 
     let rootNode = [...map.values()].find(
-      (n) => (n.kind === 'PackageVersion' || n.label === 'PackageVersion') &&
-             n.properties?.name === impact.incident.packageName &&
-             (!impact.incident.version || n.properties?.version === impact.incident.version)
+      (n) =>
+        (n.kind === 'PackageVersion' || n.label === 'PackageVersion') &&
+        n.properties?.name === impact.incident.packageName &&
+        (!impact.incident.version || n.properties?.version === impact.incident.version)
     );
     if (!rootNode) {
-      rootNode = { id: 'root-pkg', kind: 'PackageVersion', label: 'PackageVersion', properties: { name: impact.incident.packageName, version: impact.incident.version } };
+      rootNode = {
+        id: 'root-pkg',
+        kind: 'PackageVersion',
+        label: 'PackageVersion',
+        properties: { name: impact.incident.packageName, version: impact.incident.version }
+      };
       map.set('root-pkg', rootNode);
     }
 
     (impact.services || []).forEach((svc, i) => {
       const id = String(svc.id || `svc-${i}`);
       if (!map.has(id)) {
-        map.set(id, { id, kind: 'Service', label: 'Service', properties: { service: svc.name, name: svc.name, owner: svc.owner, environment: svc.environment, direct: svc.direct } });
+        map.set(id, {
+          id,
+          kind: 'Service',
+          label: 'Service',
+          properties: { service: svc.name, name: svc.name, owner: svc.owner, environment: svc.environment, direct: svc.direct }
+        });
       }
     });
 
     (impact.lockfiles || []).forEach((lk, i) => {
       const id = String(lk.id || `lock-${i}`);
       if (!map.has(id)) {
-        map.set(id, { id, kind: 'Lockfile', label: 'Lockfile', properties: { file_name: lk.name || 'package-lock.json', name: lk.name } });
+        map.set(id, {
+          id,
+          kind: 'Lockfile',
+          label: 'Lockfile',
+          properties: { file_name: lk.name || 'package-lock.json', name: lk.name }
+        });
       }
     });
 
     (impact.dependentVersions || []).forEach((dep, i) => {
       const id = String(dep.id || `dep-${i}`);
       if (!map.has(id) && dep.name !== impact.incident.packageName) {
-        map.set(id, { id, kind: 'PackageVersion', label: 'PackageVersion', properties: { name: dep.name, version: dep.version } });
+        map.set(id, {
+          id,
+          kind: 'PackageVersion',
+          label: 'PackageVersion',
+          properties: { name: dep.name, version: dep.version }
+        });
       }
     });
 
@@ -204,35 +232,91 @@ function GraphExplorer({ impact }) {
     const lockfiles = nodes.filter((n) => n.kind === 'Lockfile');
     const packages = nodes.filter((n) => n.kind === 'PackageVersion' && n.id !== rootNode.id);
 
-    const positions = new Map();
-    positions.set(String(rootNode.id), { x: 470, y: 175 });
+    const defaultPositions = new Map();
+    defaultPositions.set(String(rootNode.id), { x: 450, y: 190 });
 
     services.forEach((node, idx) => {
       const count = Math.max(services.length, 1);
-      const spacing = count === 1 ? 175 : 70 + idx * Math.min(65, 230 / (count - 1 || 1));
-      positions.set(String(node.id), { x: 90, y: spacing });
+      const spacing = count === 1 ? 190 : 75 + idx * Math.min(65, 230 / (count - 1 || 1));
+      defaultPositions.set(String(node.id), { x: 80, y: spacing });
     });
 
     lockfiles.forEach((node, idx) => {
       const count = Math.max(lockfiles.length, 1);
-      const spacing = count === 1 ? 175 : 85 + idx * Math.min(75, 200 / (count - 1 || 1));
-      positions.set(String(node.id), { x: 275, y: spacing });
+      const spacing = count === 1 ? 190 : 85 + idx * Math.min(75, 210 / (count - 1 || 1));
+      defaultPositions.set(String(node.id), { x: 255, y: spacing });
     });
 
-    packages.slice(0, 12).forEach((node, idx) => {
-      positions.set(String(node.id), { x: 720, y: 45 + (idx % 7) * 45 });
+    const uniquePackages = packages.slice(0, 10);
+    uniquePackages.forEach((node, idx) => {
+      const useDoubleCol = uniquePackages.length > 5;
+      const col = useDoubleCol ? idx % 2 : 0;
+      const row = useDoubleCol ? Math.floor(idx / 2) : idx;
+      const totalRows = useDoubleCol ? Math.ceil(uniquePackages.length / 2) : uniquePackages.length;
+      const rowHeight = Math.min(55, 280 / Math.max(totalRows, 1));
+      const x = useDoubleCol ? (col === 0 ? 650 : 795) : 690;
+      const y = 50 + row * rowHeight;
+      defaultPositions.set(String(node.id), { x, y });
     });
 
-    return { nodes, positions, rootNode, services, lockfiles, packages };
+    const activeNodes = [rootNode, ...services, ...lockfiles, ...uniquePackages];
+    return { nodes: activeNodes, defaultPositions, rootNode, services, lockfiles, packages: uniquePackages };
   }, [impact]);
+
+  const getSvgPoint = (e) => {
+    if (!svgRef.current) return { x: 0, y: 0 };
+    const rect = svgRef.current.getBoundingClientRect();
+    const clientX = e.clientX ?? (e.touches && e.touches[0]?.clientX) ?? 0;
+    const clientY = e.clientY ?? (e.touches && e.touches[0]?.clientY) ?? 0;
+    const scaleX = 940 / (rect.width || 1);
+    const scaleY = 380 / (rect.height || 1);
+    return {
+      x: (clientX - rect.left) * scaleX,
+      y: (clientY - rect.top) * scaleY
+    };
+  };
+
+  const handleMouseDown = (nodeId, e) => {
+    e.stopPropagation();
+    const svgPt = getSvgPoint(e);
+    const currentPos = customPositions[nodeId] || graph.defaultPositions.get(String(nodeId)) || { x: 450, y: 190 };
+    dragRef.current = {
+      id: nodeId,
+      startX: svgPt.x,
+      startY: svgPt.y,
+      nodeStartX: currentPos.x,
+      nodeStartY: currentPos.y
+    };
+    setDraggingId(nodeId);
+  };
+
+  const handleMouseMove = (e) => {
+    if (!dragRef.current) return;
+    const svgPt = getSvgPoint(e);
+    const dx = svgPt.x - dragRef.current.startX;
+    const dy = svgPt.y - dragRef.current.startY;
+    const newX = Math.round(Math.max(25, Math.min(915, dragRef.current.nodeStartX + dx)));
+    const newY = Math.round(Math.max(25, Math.min(355, dragRef.current.nodeStartY + dy)));
+    setCustomPositions((prev) => ({
+      ...prev,
+      [dragRef.current.id]: { x: newX, y: newY }
+    }));
+  };
+
+  const handleMouseUp = () => {
+    dragRef.current = null;
+    setDraggingId(null);
+  };
+
+  const getNodePos = (id) => customPositions[String(id)] || graph.defaultPositions.get(String(id)) || { x: 450, y: 190 };
 
   const lines = useMemo(() => {
     const items = [];
     const drawn = new Set();
 
     const addLine = (n1, n2) => {
-      const p1 = graph.positions.get(String(n1));
-      const p2 = graph.positions.get(String(n2));
+      const p1 = getNodePos(n1);
+      const p2 = getNodePos(n2);
       if (p1 && p2) {
         const key = `${p1.x},${p1.y}->${p2.x},${p2.y}`;
         if (!drawn.has(key)) {
@@ -242,7 +326,7 @@ function GraphExplorer({ impact }) {
       }
     };
 
-    (impact.paths || []).slice(0, 20).forEach((path) => {
+    (impact.paths || []).slice(0, 25).forEach((path) => {
       const verts = (path.vertices || []).map((v) => String(v.id));
       for (let i = 1; i < verts.length; i++) {
         addLine(verts[i - 1], verts[i]);
@@ -267,65 +351,149 @@ function GraphExplorer({ impact }) {
     });
 
     return items;
-  }, [impact, graph]);
+  }, [impact, graph, customPositions]);
 
   return (
     <div className="graph-explorer">
-      <svg viewBox="0 0 880 350" role="img" aria-label="Interactive blast radius evidence graph">
+      <div className="graph-toolbar">
+        <button
+          type="button"
+          className="graph-tool-btn"
+          onClick={() => setCustomPositions({})}
+          title="Reset node positions to default"
+        >
+          ↺ Reset Layout
+        </button>
+        <span style={{ fontSize: '11px', color: '#94a3b8', display: 'flex', alignItems: 'center', gap: '4px', marginLeft: '6px' }}>
+          💡 Drag any node to reposition freely
+        </span>
+      </div>
+
+      <svg
+        ref={svgRef}
+        viewBox="0 0 940 380"
+        role="img"
+        aria-label="Interactive blast radius evidence graph"
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseUp}
+        onTouchMove={handleMouseMove}
+        onTouchEnd={handleMouseUp}
+      >
         <defs>
           <linearGradient id="edge-grad" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="rgba(200, 90, 80, 0.45)" />
-            <stop offset="50%" stopColor="rgba(195, 159, 69, 0.45)" />
-            <stop offset="100%" stopColor="rgba(168, 85, 247, 0.55)" />
+            <stop offset="0%" stopColor="rgba(244, 63, 94, 0.4)" />
+            <stop offset="40%" stopColor="rgba(251, 191, 36, 0.4)" />
+            <stop offset="100%" stopColor="rgba(192, 132, 252, 0.55)" />
           </linearGradient>
+          <filter id="glow-root" x="-30%" y="-30%" width="160%" height="160%">
+            <feGaussianBlur stdDeviation="6" result="blur" />
+            <feComposite in="SourceGraphic" in2="blur" operator="over" />
+          </filter>
         </defs>
+
         {lines.map(({ key, ...line }) => (
-          <line key={key} {...line} className="evidence-line" stroke="url(#edge-grad)" strokeWidth="1.5" strokeDasharray="3 3" />
+          <line key={key} {...line} className="evidence-line" stroke="url(#edge-grad)" strokeWidth="1.8" strokeDasharray="3 3" />
         ))}
+
         {graph.nodes.map((node) => {
-          const point = graph.positions.get(String(node.id));
-          if (!point) return null;
+          const point = getNodePos(node.id);
           const isRoot = node.id === graph.rootNode.id || (node.kind === 'PackageVersion' && node.properties?.name === impact.incident.packageName);
           const type = isRoot ? 'root' : node.kind === 'Service' ? 'service' : node.kind === 'Lockfile' ? 'lock' : 'package';
-          const label = isRoot
-            ? `${impact.incident.packageName}@${impact.incident.version || ''}`
-            : node.kind === 'Service'
+          const rawName = node.kind === 'Service'
             ? node.properties?.service || node.properties?.name
             : node.kind === 'Lockfile'
             ? node.properties?.file_name || 'package-lock.json'
+            : isRoot
+            ? `${impact.incident.packageName}@${impact.incident.version || ''}`
             : `${node.properties?.name || 'package'}${node.properties?.version ? `@${node.properties.version}` : ''}`;
+          
+          const label = String(rawName || '');
+          const badgeWidth = Math.min(220, Math.max(50, label.length * 7.2 + 14));
+          const isDragging = draggingId === String(node.id);
 
           return (
-            <g key={node.id} className="graph-mark" onClick={() => setSelected({ ...node, label: label || node.kind })}>
+            <g
+              key={node.id}
+              className={`graph-mark ${isDragging ? 'dragging' : ''}`}
+              onMouseDown={(e) => handleMouseDown(String(node.id), e)}
+              onTouchStart={(e) => handleMouseDown(String(node.id), e)}
+              onClick={() => setSelected({ ...node, label: label || node.kind })}
+            >
+              {isRoot && (
+                <circle
+                  cx={point.x}
+                  cy={point.y}
+                  r="32"
+                  fill="none"
+                  stroke="#c084fc"
+                  strokeWidth="1.5"
+                  strokeDasharray="4 4"
+                  opacity="0.6"
+                />
+              )}
+
               <circle
                 cx={point.x}
                 cy={point.y}
                 r={type === 'root' ? 24 : type === 'service' ? 12 : 9}
                 className={`graph-dot ${type}`}
+                filter={isRoot ? 'url(#glow-root)' : undefined}
               />
-              <text
-                x={point.x + (type === 'service' ? 18 : 0)}
-                y={point.y + (type === 'root' ? 4 : type === 'service' ? 4 : 22)}
-                textAnchor={type === 'service' ? 'start' : 'middle'}
-                className={`graph-label ${type}`}
-              >
-                {type === 'root' ? 'ROOT' : String(label).slice(0, 22)}
-              </text>
+
               {type === 'root' && (
-                <text x={point.x} y={point.y + 36} textAnchor="middle" fill="#c084fc" fontSize="10" fontFamily="monospace">
-                  {String(label).slice(0, 24)}
+                <text x={point.x} y={point.y + 4} textAnchor="middle" fill="#ffffff" fontWeight="700" fontSize="11" fontFamily="monospace">
+                  ROOT
                 </text>
+              )}
+
+              {type === 'root' && (
+                <g transform={`translate(${point.x - badgeWidth / 2}, ${point.y + 32})`}>
+                  <rect width={badgeWidth} height="22" className="label-bg root" />
+                  <text x={badgeWidth / 2} y="15" textAnchor="middle" className="graph-label root">
+                    {label.length > 26 ? label.slice(0, 24) + '…' : label}
+                  </text>
+                </g>
+              )}
+
+              {type === 'service' && (
+                <g transform={`translate(${point.x + 18}, ${point.y - 11})`}>
+                  <rect width={badgeWidth} height="22" className="label-bg service" />
+                  <text x={badgeWidth / 2} y="15" textAnchor="middle" className="graph-label service">
+                    {label.length > 24 ? label.slice(0, 22) + '…' : label}
+                  </text>
+                </g>
+              )}
+
+              {type === 'lock' && (
+                <g transform={`translate(${point.x - badgeWidth / 2}, ${point.y - 28})`}>
+                  <rect width={badgeWidth} height="20" className="label-bg lock" />
+                  <text x={badgeWidth / 2} y="14" textAnchor="middle" className="graph-label lock">
+                    {label.length > 22 ? label.slice(0, 20) + '…' : label}
+                  </text>
+                </g>
+              )}
+
+              {type === 'package' && (
+                <g transform={`translate(${point.x + 14}, ${point.y - 11})`}>
+                  <rect width={badgeWidth} height="22" className="label-bg package" />
+                  <text x={badgeWidth / 2} y="15" textAnchor="middle" className="graph-label package">
+                    {label.length > 22 ? label.slice(0, 20) + '…' : label}
+                  </text>
+                </g>
               )}
             </g>
           );
         })}
       </svg>
+
       <div className="graph-legend">
         <span><i className="legend-dot root"></i>Compromised version</span>
         <span><i className="legend-dot service"></i>Service</span>
         <span><i className="legend-dot lock"></i>Lockfile</span>
         <span><i className="legend-dot package"></i>Dependency</span>
       </div>
+
       {selected && (
         <div className="node-detail">
           <span className="eyebrow">SELECTED EVIDENCE</span>
